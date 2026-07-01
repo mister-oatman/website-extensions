@@ -6,21 +6,20 @@ Website extensions for **Mister Oatman**.
 
 A daily [GitHub Actions workflow](.github/workflows/scrape.yml) scrapes the
 Instagram and TikTok follower counts for every handle listed in
-[`usernames_to_scrape`](usernames_to_scrape) (one username per line) and
-publishes the results to GitHub Pages:
-
-- `data.json` — machine-readable counts, e.g. `https://<user>.github.io/<repo>/data.json`
+[`usernames_to_scrape`](usernames_to_scrape) (one username per line) and writes
+them to `site/data.json`.
 
 The workflow runs every morning (`05:00 UTC`) and can also be triggered manually
-from the **Actions** tab.
+from the **Actions** tab. While the repository is private, the resulting JSON is
+printed to the workflow log (the **Show scraped data** step) instead of being
+published.
 
-### One-time setup
+### Publishing to GitHub Pages
 
-1. Push this repository to GitHub.
-2. In **Settings → Pages**, set **Source** to **GitHub Actions**.
-3. Trigger the **Scrape follower counts** workflow once from the **Actions** tab
-   (or wait for the next scheduled run). The Pages URL appears in the workflow
-   summary once it completes.
+Once the repository is public, uncomment the Pages blocks in
+[the workflow](.github/workflows/scrape.yml), then in **Settings → Pages** set
+**Source** to **GitHub Actions**. The JSON will then be served at
+`https://<user>.github.io/<repo>/data.json`.
 
 ### Running locally
 
