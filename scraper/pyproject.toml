@@ -5,6 +5,9 @@ description = ""
 requires-python = ">=3.13,<3.14"
 dependencies = ["curl-cffi~=0.15", "lxml~=6.1"]
 
+[project.scripts]
+scrape = "app.main:main"
+
 [dependency-groups]
 dev = ["ruff~=0.2", "ty~=0.0"]
 

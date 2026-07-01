@@ -6,3 +6,6 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+
+# scraper build output (published to GitHub Pages by CI)
+/site/
