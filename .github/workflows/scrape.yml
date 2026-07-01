@@ -27,10 +27,10 @@ jobs:
     #   url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
 
@@ -38,7 +38,7 @@ jobs:
         run: uv sync --frozen --no-dev
 
       - name: Scrape follower counts
-        run: uv run scrape
+        run: uv run --frozen --no-dev scrape
         env:
           # Optional: set a repo secret SCRAPER_PROXY (http://user:pass@host:port)
           # to a residential proxy. Instagram blocks CI/datacenter IPs, so the
