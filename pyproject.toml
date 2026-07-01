@@ -1,0 +1,7 @@
+[tool.uv.workspace]
+members = ["scraper"]
+
+[dependency-groups]
+dev = [
+  "prek~=0.2"
+]
