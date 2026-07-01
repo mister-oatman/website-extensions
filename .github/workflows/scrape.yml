@@ -39,6 +39,11 @@ jobs:
 
       - name: Scrape follower counts
         run: uv run scrape
+        env:
+          # Optional: set a repo secret SCRAPER_PROXY (http://user:pass@host:port)
+          # to a residential proxy. Instagram blocks CI/datacenter IPs, so the
+          # scrape needs an unblocked IP. Unset -> no proxy (normal request).
+          SCRAPER_PROXY: ${{ secrets.SCRAPER_PROXY }}
 
       - name: Show scraped data
         run: cat site/data.json
