@@ -1,0 +1,68 @@
+# markdownlint-cli2 configuration: only enable fixable rules
+fix: true
+config:
+  default: false
+  # MD004: Use a consistent list marker style (e.g., all '-' or all '*').
+  MD004: true
+  # MD005: Keep indentation of list items consistent.
+  MD005: true
+  # MD007: Use proper indentation for nested list items.
+  MD007: true
+  # MD009: Disallow trailing spaces at end of lines.
+  MD009: true
+  # MD010: Disallow hard tabs; use spaces instead.
+  MD010: true
+  # MD011: Ensure headings increase by only one level at a time.
+  MD011: true
+  # MD012: Avoid multiple consecutive blank lines.
+  MD012: true
+  # MD014: Avoid using bare $ in shell code blocks; prefer code fences with language.
+  MD014: true
+  # MD018: No missing space after # in headings.
+  MD018: true
+  # MD019: No multiple spaces after # in headings.
+  MD019: true
+  # MD020: Headings should be surrounded by blank lines (not at start of file).
+  MD020: true
+  # MD021: Headings should be surrounded by blank lines (not at end of file).
+  MD021: true
+  # MD022: Headings should be surrounded by blank lines on both sides.
+  MD022: true
+  # MD023: Headings must start at the beginning of the line.
+  MD023: true
+  # MD026: Disallow trailing punctuation in headings.
+  MD026: true
+  # MD027: Use a single space after blockquote markers (>).
+  MD027: true
+  # MD029: Use consistent ordered list numbering.
+  MD029: false
+  # MD030: Use consistent spacing after list markers.
+  MD030: true
+  # MD031: Fenced code blocks should be surrounded by blank lines.
+  MD031: true
+  # MD032: Lists should be surrounded by blank lines.
+  MD032: true
+  # MD034: Avoid bare URLs; use proper links.
+  MD034: true
+  # MD037: No space inside emphasis markers.
+  MD037: true
+  # MD038: No space inside code span backticks.
+  MD038: true
+  # MD039: No space inside link text brackets.
+  MD039: true
+  # MD044: Use consistent, correct capitalization for proper names.
+  MD044: true
+  # MD047: Files should end with a single newline.
+  MD047: true
+  # MD049: Use a consistent emphasis style (* or _).
+  MD049: true
+  # MD050: Use a consistent strong emphasis style (** or __).
+  MD050: true
+  # MD051: Use consistent link reference definitions.
+  MD051: true
+  # MD053: Link reference definitions should be needed/used.
+  MD053: true
+  # MD054: Link reference definitions should be unique.
+  MD054: true
+  # MD058: Use consistent indentation for tables.
+  MD058: true
