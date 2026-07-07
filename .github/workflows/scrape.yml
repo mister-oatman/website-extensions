@@ -38,6 +38,8 @@ jobs:
         run: uv sync --frozen --no-dev
 
       - name: Scrape follower counts
+        env:
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
         run: uv run --frozen --no-dev scrape
 
       - name: Show scraped data

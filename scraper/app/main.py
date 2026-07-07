@@ -1,8 +1,8 @@
 """Scrape Instagram and TikTok follower counts into a JSON file.
 
-Reads the handles listed in ``usernames_to_scrape`` (one per line), fetches the
-current follower count for each on Instagram and TikTok, and writes the results
-to ``site/data.json``.
+Reads the handles listed in ``instagram_profiles`` and ``tiktok_profiles`` (one
+per line, one file per platform), fetches the current follower count for each,
+and writes the results to ``site/data.json``.
 
 Run with ``uv run scrape`` (see ``[project.scripts]`` in ``pyproject.toml``).
 """
@@ -19,12 +19,17 @@ logger = logging.getLogger(__name__)
 
 # Repo root is two levels up from this file: scraper/app/main.py -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_INPUT = REPO_ROOT / "usernames_to_scrape"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "site"
 
 PLATFORMS: dict[str, type[SocialService]] = {
     "instagram": InstagramService,
     "tiktok": TikTokService,
+}
+
+# Default source file per platform, listing the profiles to scrape.
+DEFAULT_INPUTS: dict[str, Path] = {
+    "instagram": REPO_ROOT / "instagram_profiles",
+    "tiktok": REPO_ROOT / "tiktok_profiles",
 }
 
 
@@ -41,41 +46,53 @@ def read_usernames(path: Path) -> list[str]:
     return [stripped for line in lines if (stripped := line.strip())]
 
 
-def scrape_user(username: str) -> dict[str, dict[str, str | None]]:
-    """Fetch the follower count for ``username`` on every platform.
+def scrape_profile(platform: str, username: str) -> dict[str, str | None]:
+    """Fetch the follower count for ``username`` on ``platform``.
 
-    Failures on a single platform are captured in the result rather than raised,
-    so one broken profile never aborts the whole run.
+    Failures are captured in the result rather than raised, so one broken
+    profile never aborts the whole run.
 
     Args:
+        platform: The platform key (a key of ``PLATFORMS``).
         username: The handle to look up.
 
     Returns:
-        A mapping of platform name to ``{"followers": ..., "error": ...}``.
+        An entry of ``{"platform": ..., "username": ..., "followers": ...,
+        "error": ...}``.
     """
-    result: dict[str, dict[str, str | None]] = {}
-    for platform, service in PLATFORMS.items():
-        try:
-            followers = service.get_followers(username)
-            result[platform] = {"followers": followers, "error": None}
-            logger.info("%s / %s: %s", username, platform, followers)
-        except Exception as exc:  # noqa: BLE001 - record any scrape failure
-            result[platform] = {"followers": None, "error": str(exc)}
-            logger.warning("%s / %s failed: %s", username, platform, exc)
-    return result
+    service = PLATFORMS[platform]
+    try:
+        followers = service.get_followers(username)
+        logger.info("%s / %s: %s", username, platform, followers)
+        return {
+            "platform": platform,
+            "username": username,
+            "followers": followers,
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001 - record any scrape failure
+        logger.warning("%s / %s failed: %s", username, platform, exc)
+        return {
+            "platform": platform,
+            "username": username,
+            "followers": None,
+            "error": str(exc),
+        }
 
 
-def build_data(usernames: list[str]) -> dict:
-    """Scrape every username and assemble the JSON payload.
+def build_data(profiles_by_platform: dict[str, list[str]]) -> dict:
+    """Scrape every profile and assemble the JSON payload.
 
     Args:
-        usernames: The handles to scrape.
+        profiles_by_platform: The usernames to scrape, keyed by platform.
 
     Returns:
         The serialisable data structure written to ``data.json``.
     """
     accounts = [
-        {"username": username, **scrape_user(username)} for username in usernames
+        scrape_profile(platform, username)
+        for platform, usernames in profiles_by_platform.items()
+        for username in usernames
     ]
     return {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -85,14 +102,15 @@ def build_data(usernames: list[str]) -> dict:
 
 
 def main() -> None:
-    """Entry point: scrape all usernames and write the site output."""
+    """Entry point: scrape all profiles and write the site output."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=DEFAULT_INPUT,
-        help="File listing usernames to scrape (one per line).",
-    )
+    for platform in PLATFORMS:
+        parser.add_argument(
+            f"--{platform}-input",
+            type=Path,
+            default=DEFAULT_INPUTS[platform],
+            help=f"File listing {platform} profiles to scrape (one per line).",
+        )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -103,10 +121,14 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    usernames = read_usernames(args.input)
-    logger.info("Scraping %d username(s) from %s", len(usernames), args.input)
+    profiles_by_platform = {
+        platform: read_usernames(getattr(args, f"{platform}_input"))
+        for platform in PLATFORMS
+    }
+    for platform, usernames in profiles_by_platform.items():
+        logger.info("Scraping %d %s profile(s)", len(usernames), platform)
 
-    data = build_data(usernames)
+    data = build_data(profiles_by_platform)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "data.json").write_text(
