@@ -146,7 +146,7 @@ class SocialService(ABC):
 
         client = serpapi.Client(api_key=api_key, timeout=10)
 
-        for search_prefix in ("site:", ""):
+        for search_prefix in ("", "site:"):
             results = client.search(
                 {"engine": "google", "q": f"{search_prefix}{url} follower"}
             )
