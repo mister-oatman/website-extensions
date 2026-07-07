@@ -3,15 +3,15 @@ import os
 from abc import ABC, abstractmethod
 from re import IGNORECASE, search, sub
 
-import requests
+import serpapi
 from curl_cffi import requests as curl_requests
 from lxml.etree import HTML as etreeHTML
 from lxml.etree import HTMLParser as etreeHTMLParser
 
 logger = logging.getLogger(__name__)
 
-SERPER_API_KEY_ENV = "SERPER_API_KEY"
-"""Name of the environment variable holding the Serper API key."""
+SERPAPI_KEY_ENV = "SERPAPI_KEY"
+"""Name of the environment variable holding the SerpApi API key."""
 
 
 class SocialService(ABC):
@@ -27,7 +27,7 @@ class SocialService(ABC):
         """Return the follower count for ``username`` as a display string.
 
         Scrapes the public profile page directly and only falls back to a
-        Google (Serper) search if the direct scrape fails.
+        Google (SerpApi) search if the direct scrape fails.
 
         Args:
             username: The profile handle to look up.
@@ -98,7 +98,7 @@ class SocialService(ABC):
 
     @classmethod
     def _get_followers_from_search(cls, username: str) -> str:
-        """Return the follower count via a Google (Serper) search fallback.
+        """Return the follower count via a Google (SerpApi) search fallback.
 
         Args:
             username: The profile handle to look up.
@@ -132,45 +132,37 @@ class SocialService(ABC):
             The page's meta description as text.
 
         Raises:
-            ValueError: If the ``SERPER_API_KEY`` environment variable is
-                unset, the request returns a non-200 status code, or the meta
-                description cannot be found.
+            ValueError: If the ``SERPAPI_KEY`` environment variable is unset or
+                no matching search result with a follower count is found.
+            serpapi.HTTPError: If a SerpApi request fails.
         """
-        api_key = os.environ.get(SERPER_API_KEY_ENV)
+        api_key = os.environ.get(SERPAPI_KEY_ENV)
         if not api_key:
             raise ValueError(
-                f"{SERPER_API_KEY_ENV} is not set; cannot use the search fallback."
+                f"{SERPAPI_KEY_ENV} is not set; cannot use the search fallback."
             )
 
         url = sub(r"^https?://(www\.)?", "", cls.USER_URL.format(username=username))
 
+        client = serpapi.Client(api_key=api_key, timeout=10)
+
         for search_prefix in ("site:", ""):
-            r = requests.post(
-                "https://google.serper.dev/search",
-                json={"q": f"{search_prefix}{url} follower"},
-                headers={
-                    "X-API-KEY": api_key,
-                    "Content-Type": "application/json",
-                },
-                timeout=10,
+            results = client.search(
+                {"engine": "google", "q": f"{search_prefix}{url} follower"}
             )
 
-            if r.status_code == 200 and (
-                result := next(
-                    (
-                        result["snippet"]
-                        for result in r.json().get("organic", [])
-                        if search(rf"^https?://(www\.)?{url}/?", result["link"])
-                        and search(r"\S+(?= follower)", result["snippet"], IGNORECASE)
-                    ),
-                    None,
-                )
+            if result := next(
+                (
+                    result["snippet"]
+                    for result in results.get("organic_results", [])
+                    if search(rf"^https?://(www\.)?{url}/?", result["link"])
+                    and search(r"\S+(?= follower)", result["snippet"], IGNORECASE)
+                ),
+                None,
             ):
                 return result
 
-        raise ValueError(
-            f"Failed to fetch page for {username} on {cls.BASE_URL}. Status code: {r.status_code}"
-        )
+        raise ValueError(f"No follower snippet found for {username} on {cls.BASE_URL}.")
 
 
 class InstagramService(SocialService):

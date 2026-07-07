@@ -28,9 +28,9 @@ scrape:
         - uv.lock
     paths:
       - .uv-cache
-  # SERPER_API_KEY (the search-fallback key) must be added as a masked CI/CD
+  # SERPAPI_KEY (the search-fallback key) must be added as a masked CI/CD
   # variable under Settings > CI/CD > Variables; it is injected into the job
-  # environment automatically, like the GitHub `secrets.SERPER_API_KEY`.
+  # environment automatically, like the GitHub `secrets.SERPAPI_KEY`.
   script:
     - uv sync --frozen --no-dev
     - uv run --frozen --no-dev scrape

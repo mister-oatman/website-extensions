@@ -39,7 +39,7 @@ jobs:
 
       - name: Scrape follower counts
         env:
-          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
         run: uv run --frozen --no-dev scrape
 
       - name: Show scraped data
