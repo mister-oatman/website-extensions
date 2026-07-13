@@ -1,9 +1,12 @@
 name: Scrape follower counts
 
 on:
-  # schedule:
-  #   # 05:00 UTC every day = 07:00 Europe/Berlin (summer) / 06:00 (winter).
-  #   - cron: "0 5 * * *"
+  schedule:
+    # 05:00 UTC every day = 07:00 Europe/Berlin (summer) / 06:00 (winter).
+    # The script itself decides on which days to actually scrape, pacing the
+    # runs so the SerpApi search fallback stays within its billing-period
+    # quota (see scraper/app/quota.py) — so a daily schedule is safe.
+    - cron: "0 5 * * *"
   # Allow running the job manually from the Actions tab.
   workflow_dispatch:
 
@@ -36,6 +39,17 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen --no-dev
+
+      # Persist the scraper's state (which search prefix worked per platform)
+      # between runs. GitHub caches are immutable, so save under a fresh key
+      # each run and restore the newest one via the prefix match.
+      - name: Restore scraper state
+        uses: actions/cache@v4
+        with:
+          path: .scraper-state.json
+          key: scraper-state-${{ github.run_id }}
+          restore-keys: |
+            scraper-state-
 
       - name: Scrape follower counts
         env:

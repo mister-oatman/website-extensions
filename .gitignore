@@ -9,3 +9,6 @@ __pycache__/
 
 # scraper build output (published to GitHub Pages by CI)
 /site/
+
+# scraper state (persisted between runs via the CI cache)
+/.scraper-state.json

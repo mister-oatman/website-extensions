@@ -8,15 +8,22 @@ from curl_cffi import requests as curl_requests
 from lxml.etree import HTML as etreeHTML
 from lxml.etree import HTMLParser as etreeHTMLParser
 
+from app import state
+
 logger = logging.getLogger(__name__)
 
 SERPAPI_KEY_ENV = "SERPAPI_KEY"
 """Name of the environment variable holding the SerpApi API key."""
 
+SEARCH_PREFIXES = ("", "site:")
+"""Google search prefixes the search fallback tries, in default order."""
+
 
 class SocialService(ABC):
     """Base class for scraping public follower counts from social platforms."""
 
+    PLATFORM: str
+    """Platform key used in output and persistent state, e.g. ``"instagram"``."""
     BASE_URL: str
     """Root URL of the platform, e.g. ``https://www.instagram.com``."""
     USER_URL: str
@@ -146,7 +153,13 @@ class SocialService(ABC):
 
         client = serpapi.Client(api_key=api_key, timeout=10)
 
-        for search_prefix in ("", "site:"):
+        prefixes = list(SEARCH_PREFIXES)
+        # Try the prefix that worked last time first; it usually still works
+        # and then the second search is never spent.
+        if (preferred := state.get_search_prefix(cls.PLATFORM)) in prefixes:
+            prefixes.sort(key=lambda prefix: prefix != preferred)
+
+        for search_prefix in prefixes:
             results = client.search(
                 {"engine": "google", "q": f"{search_prefix}{url} follower"}
             )
@@ -160,6 +173,7 @@ class SocialService(ABC):
                 ),
                 None,
             ):
+                state.set_search_prefix(cls.PLATFORM, search_prefix)
                 return result
 
         raise ValueError(f"No follower snippet found for {username} on {cls.BASE_URL}.")
@@ -168,6 +182,7 @@ class SocialService(ABC):
 class InstagramService(SocialService):
     """Scrape follower counts from Instagram profiles."""
 
+    PLATFORM = "instagram"
     BASE_URL = "https://www.instagram.com"
     USER_URL = f"{BASE_URL}/{{username}}"
 
@@ -209,6 +224,7 @@ class InstagramService(SocialService):
 class TikTokService(SocialService):
     """Scrape follower counts from TikTok profiles."""
 
+    PLATFORM = "tiktok"
     BASE_URL = "https://tiktok.com"
     USER_URL = f"{BASE_URL}/@{{username}}"
 

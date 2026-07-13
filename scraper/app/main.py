@@ -4,6 +4,10 @@ Reads the handles listed in ``instagram_profiles`` and ``tiktok_profiles`` (one
 per line, one file per platform), fetches the current follower count for each,
 and writes the results to ``site/data.json``.
 
+The CI schedule invokes this daily, but the script itself decides whether to
+run today: it paces the runs so the SerpApi search fallback stays within the
+billing period's quota (see ``app.quota``).
+
 Run with ``uv run scrape`` (see ``[project.scripts]`` in ``pyproject.toml``).
 """
 
@@ -13,6 +17,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app import quota
 from app.services.social import InstagramService, SocialService, TikTokService
 
 logger = logging.getLogger(__name__)
@@ -125,6 +130,13 @@ def main() -> None:
         platform: read_usernames(getattr(args, f"{platform}_input"))
         for platform in PLATFORMS
     }
+
+    profile_count = sum(len(usernames) for usernames in profiles_by_platform.values())
+    serpapi_quota = quota.serpapi_quota()
+    if not quota.should_scrape(datetime.now(UTC).date(), serpapi_quota, profile_count):
+        logger.info("Not scraping today; leaving the existing output untouched.")
+        return
+
     for platform, usernames in profiles_by_platform.items():
         logger.info("Scraping %d %s profile(s)", len(usernames), platform)
 
