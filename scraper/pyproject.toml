@@ -9,7 +9,11 @@ dependencies = ["curl-cffi~=0.15", "lxml~=6.1", "serpapi~=0.1"]
 scrape = "app.main:main"
 
 [dependency-groups]
-dev = ["ruff~=0.2", "ty~=0.0"]
+dev = [
+    "lxml-stubs>=0.5.1",
+    "ruff~=0.2",
+    "ty~=0.0",
+]
 
 [build-system]
 requires = ["hatchling"]

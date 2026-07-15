@@ -30,7 +30,7 @@ repos:
       - id: local-ty-check
         name: ty check
         entry: uv run ty check
-        files: ^data-analysis/app/
+        files: ^scraper/app/
         require_serial: true
         language: unsupported
         types: [python]

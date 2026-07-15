@@ -3,6 +3,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from re import IGNORECASE, search, sub
+from typing import cast
 
 import serpapi
 from curl_cffi import requests as curl_requests
@@ -278,7 +279,12 @@ class InstagramService(SocialService):
         user_html = cls.get_user_html(username)
 
         tree = etreeHTML(user_html, parser=etreeHTMLParser(remove_comments=True))
-        meta_tag = tree.xpath('//meta[@property="og:description"]/@content')
+        # This XPath selects an attribute value, so it always yields a list of
+        # strings; xpath()'s static return type is broader (it can also be a
+        # scalar), hence the cast.
+        meta_tag = cast(
+            list[str], tree.xpath('//meta[@property="og:description"]/@content')
+        )
 
         if not meta_tag:
             raise ValueError(
