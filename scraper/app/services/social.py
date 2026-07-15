@@ -20,7 +20,7 @@ SERPAPI_KEY_ENV = "SERPAPI_KEY"
 SEARCH_PREFIXES = ("", "site:")
 """Google search prefixes the search fallback tries, in default order."""
 
-SERPAPI_TIMEOUT_S = 30
+SERPAPI_TIMEOUT_S = 300
 """Seconds to wait for a SerpApi response before timing out."""
 
 FALLBACK_SEARCHES_PER_HOUR = 1000
@@ -235,14 +235,19 @@ class SocialService(ABC):
 
         for search_prefix in prefixes:
             _throttle_search(client)
-            results = client.search(
-                {
-                    "engine": "google",
-                    "q": f"{search_prefix}{url} follower",
-                    "gl": "de",
-                    "location": "585069a5ee19ad271e9b56e3",
-                }
-            )
+
+            try:
+                results = client.search(
+                    {
+                        "engine": "google",
+                        "q": f"{search_prefix}{url} follower",
+                        "gl": "de",
+                        "location": "585069a5ee19ad271e9b56e3",
+                    }
+                )
+            except serpapi.SerpApiError as exc:
+                logger.warning("SerpApi request failed (%s).", exc)
+                continue
 
             if result := next(
                 (
