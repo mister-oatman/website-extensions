@@ -58,3 +58,35 @@ SERPAPI_KEY=<your-key> uv run scrape
 ```
 
 Use `uv run scrape --help` to override the input files or output directory.
+
+## Badges
+
+Each run also renders a set of **SVG follower-count badges** into `site/badges/`
+— a pure-HTML alternative for pages that can't run JavaScript. A page embeds one
+with a plain `<img>` tag, and it refreshes whenever the site is republished:
+
+```html
+<img src="https://<user>.github.io/<repo>/badges/<username>-<platform>-<variant>.svg"
+     alt="Instagram followers">
+```
+
+Filenames are `<username>-<platform>-<variant>.svg` (all lower-case). Every
+account is rendered in four variants:
+
+| Variant      | Layout                                          | Colour | Best on           |
+| ------------ | ----------------------------------------------- | ------ | ----------------- |
+| `logo-white` | count followed by the platform logo             | white  | dark backgrounds  |
+| `logo-black` | count followed by the platform logo             | black  | light backgrounds |
+| `name-white` | platform name in caps before the count, no logo | white  | dark backgrounds  |
+| `name-black` | platform name in caps before the count, no logo | black  | light backgrounds |
+
+The count is Inter text on an otherwise transparent background; the logo
+variants append the Instagram or TikTok glyph, while the name variants prefix
+`INSTAGRAM` / `TIKTOK`. For example, `alinafrie-instagram-name-white.svg` reads
+`INSTAGRAM 251K`.
+
+A normal `uv run scrape` regenerates the badges. To rebuild them from an existing
+`data.json` without scraping — and without spending any SerpApi quota, handy for
+iterating on the design — run `uv run render-badges`. The manual
+[**Rebuild badges** workflow](.github/workflows/badges.yml) does the same on CI
+and redeploys Pages without scraping.
