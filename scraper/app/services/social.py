@@ -236,7 +236,12 @@ class SocialService(ABC):
         for search_prefix in prefixes:
             _throttle_search(client)
             results = client.search(
-                {"engine": "google", "q": f"{search_prefix}{url} follower"}
+                {
+                    "engine": "google",
+                    "q": f"{search_prefix}{url} follower",
+                    "gl": "de",
+                    "location": "585069a5ee19ad271e9b56e3",
+                }
             )
 
             if result := next(
