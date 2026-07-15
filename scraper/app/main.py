@@ -17,9 +17,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from curl_cffi import requests as curl_requests
-
-from app import quota
+from app import badges, datafile, quota
 from app.services.social import InstagramService, SocialService, TikTokService
 
 logger = logging.getLogger(__name__)
@@ -27,18 +25,6 @@ logger = logging.getLogger(__name__)
 # Repo root is two levels up from this file: scraper/app/main.py -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "site"
-
-# Published location of the last run's data.json. Used to recover the previous
-# follower counts when a scrape fails: site/ is gitignored and CI starts from a
-# clean checkout, so on CI the published page is the only copy that carries the
-# last run's output forward. Local runs read their own site/data.json first and
-# only fall back to this.
-DEFAULT_PREVIOUS_DATA_URL = (
-    "https://mister-oatman.github.io/website-extensions/data.json"
-)
-
-# Seconds to wait for the published data.json before giving up on it.
-PREVIOUS_DATA_TIMEOUT_S = 30
 
 PLATFORMS: dict[str, type[SocialService]] = {
     "instagram": InstagramService,
@@ -65,57 +51,6 @@ def read_usernames(path: Path) -> list[str]:
     return [stripped for line in lines if (stripped := line.strip())]
 
 
-def _read_data_file(path: Path) -> dict | None:
-    """Return the parsed ``data.json`` at ``path``, or ``None`` if unavailable.
-
-    A missing or unreadable file is not an error here — the previous counts are
-    only a best-effort fallback — so failures are logged and swallowed.
-
-    Args:
-        path: Location of a previously written ``data.json``.
-
-    Returns:
-        The parsed payload, or ``None`` if the file is absent or unparseable.
-    """
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as exc:
-        logger.warning("Could not read previous data at %s (%s).", path, exc)
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _fetch_data_url(url: str) -> dict | None:
-    """Return the parsed ``data.json`` published at ``url``, or ``None``.
-
-    Used on CI, where the previous run's output survives only on the published
-    page. Any failure (offline, 404 before the first deploy, bad JSON) is logged
-    and swallowed so the run continues without a fallback.
-
-    Args:
-        url: URL of the published ``data.json``.
-
-    Returns:
-        The parsed payload, or ``None`` if it could not be fetched or parsed.
-    """
-    try:
-        response = curl_requests.get(url, timeout=PREVIOUS_DATA_TIMEOUT_S)
-        if response.status_code != 200:
-            logger.warning(
-                "Previous data fetch from %s returned HTTP %d.",
-                url,
-                response.status_code,
-            )
-            return None
-        data = response.json()
-    except Exception as exc:  # noqa: BLE001 - the fallback is best-effort
-        logger.warning("Could not fetch previous data from %s (%s).", url, exc)
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def load_previous_followers(local_path: Path, url: str) -> dict[tuple[str, str], str]:
     """Return the last run's follower counts, keyed by ``(platform, username)``.
 
@@ -131,7 +66,7 @@ def load_previous_followers(local_path: Path, url: str) -> dict[tuple[str, str],
     Returns:
         A mapping of ``(platform, username)`` to the last known follower count.
     """
-    data = _read_data_file(local_path) or _fetch_data_url(url)
+    data = datafile.load_data(local_path, url)
     if not data:
         logger.warning("No previous data available; failures will record null.")
         return {}
@@ -244,7 +179,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--previous-data-url",
-        default=DEFAULT_PREVIOUS_DATA_URL,
+        default=datafile.DEFAULT_DATA_URL,
         help="Published data.json to read last known counts from when a scrape "
         "fails and no local site/data.json is present.",
     )
@@ -281,7 +216,9 @@ def main() -> None:
         json.dumps(data, indent=2) + "\n", encoding="utf-8"
     )
 
-    logger.info("Wrote output to %s", args.output_dir)
+    badge_count = badges.write_badges(data, args.output_dir)
+
+    logger.info("Wrote output to %s (%d badge(s))", args.output_dir, badge_count)
 
 
 if __name__ == "__main__":

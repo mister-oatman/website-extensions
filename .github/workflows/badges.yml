@@ -1,0 +1,72 @@
+name: Rebuild badges
+
+# Manual-only: regenerate the SVG follower badges from the already-published
+# data.json and redeploy the Pages site, without scraping (so no SerpApi quota
+# is spent). Useful after changing the badge design in scraper/app/badges.py.
+#
+# A Pages deploy replaces the whole site, so this job first pulls the current
+# published data.json back into site/ — otherwise redeploying badges alone would
+# drop data.json from the published site.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for GitHub Pages deployment
+  pages: write
+  id-token: write
+
+# Share the scrape workflow's Pages concurrency group so the two never deploy at
+# once; let a running deploy finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Must match app.datafile.DEFAULT_DATA_URL (the published data.json).
+  DATA_URL: https://mister-oatman.github.io/website-extensions/data.json
+
+jobs:
+  badges:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-dev
+
+      # Bring the currently-published data.json into site/ so it survives the
+      # redeploy. Fail loudly if it isn't there yet (nothing to build badges
+      # from), rather than deploying a site that drops it.
+      - name: Fetch published data.json
+        run: |
+          mkdir -p site
+          curl -fsSL "$DATA_URL" -o site/data.json
+          cat site/data.json
+
+      - name: Render badges
+        run: uv run --frozen --no-dev render-badges
+
+      - name: Show generated badges
+        run: ls -la site/badges
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
