@@ -66,7 +66,7 @@ Each run also renders a set of **SVG follower-count badges** into `site/badges/`
 with a plain `<img>` tag, and it refreshes whenever the site is republished:
 
 ```html
-<img src="https://<user>.github.io/<repo>/badges/<username>-<platform>-<variant>.svg"
+<img src="https://mister-oatman.github.io/website-extensions/badges/<username>-<platform>-<variant>.svg"
      alt="Instagram followers">
 ```
 
