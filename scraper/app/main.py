@@ -62,27 +62,16 @@ def scrape_profile(platform: str, username: str) -> dict[str, str | None]:
         username: The handle to look up.
 
     Returns:
-        An entry of ``{"platform": ..., "username": ..., "followers": ...,
-        "error": ...}``.
+        An entry of ``{"platform": ..., "username": ..., "followers": ...}``.
     """
     service = PLATFORMS[platform]
     try:
         followers = service.get_followers(username)
         logger.info("%s / %s: %s", username, platform, followers)
-        return {
-            "platform": platform,
-            "username": username,
-            "followers": followers,
-            "error": None,
-        }
+        return {"platform": platform, "username": username, "followers": followers}
     except Exception as exc:  # noqa: BLE001 - record any scrape failure
         logger.warning("%s / %s failed: %s", username, platform, exc)
-        return {
-            "platform": platform,
-            "username": username,
-            "followers": None,
-            "error": str(exc),
-        }
+        return {"platform": platform, "username": username, "followers": None}
 
 
 def build_data(profiles_by_platform: dict[str, list[str]]) -> dict:
