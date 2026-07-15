@@ -122,6 +122,11 @@ def main() -> None:
         default=DEFAULT_OUTPUT_DIR,
         help="Directory to write data.json into.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Scrape regardless of the SerpApi quota pacing (ignore should_scrape).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -132,10 +137,15 @@ def main() -> None:
     }
 
     profile_count = sum(len(usernames) for usernames in profiles_by_platform.values())
-    serpapi_quota = quota.serpapi_quota()
-    if not quota.should_scrape(datetime.now(UTC).date(), serpapi_quota, profile_count):
-        logger.info("Not scraping today; leaving the existing output untouched.")
-        return
+    if args.force:
+        logger.info("Forcing scrape; ignoring the SerpApi quota pacing.")
+    else:
+        serpapi_quota = quota.serpapi_quota()
+        if not quota.should_scrape(
+            datetime.now(UTC).date(), serpapi_quota, profile_count
+        ):
+            logger.info("Not scraping today; leaving the existing output untouched.")
+            return
 
     for platform, usernames in profiles_by_platform.items():
         logger.info("Scraping %d %s profile(s)", len(usernames), platform)

@@ -7,8 +7,14 @@ on:
     # runs so the SerpApi search fallback stays within its billing-period
     # quota (see scraper/app/quota.py) — so a daily schedule is safe.
     - cron: "0 5 * * *"
-  # Allow running the job manually from the Actions tab.
+  # Allow running the job manually from the Actions tab, optionally forcing a
+  # scrape that ignores the SerpApi quota pacing (see scraper/app/quota.py).
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Force a scrape, ignoring the SerpApi quota pacing"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,7 +59,7 @@ jobs:
       - name: Scrape follower counts
         env:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
-        run: uv run --frozen --no-dev scrape
+        run: uv run --frozen --no-dev scrape ${{ inputs.force && '--force' || '' }}
 
       - name: Show scraped data
         run: cat site/data.json
