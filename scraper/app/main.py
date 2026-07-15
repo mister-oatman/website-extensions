@@ -17,6 +17,8 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from curl_cffi import requests as curl_requests
+
 from app import quota
 from app.services.social import InstagramService, SocialService, TikTokService
 
@@ -25,6 +27,18 @@ logger = logging.getLogger(__name__)
 # Repo root is two levels up from this file: scraper/app/main.py -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "site"
+
+# Published location of the last run's data.json. Used to recover the previous
+# follower counts when a scrape fails: site/ is gitignored and CI starts from a
+# clean checkout, so on CI the published page is the only copy that carries the
+# last run's output forward. Local runs read their own site/data.json first and
+# only fall back to this.
+DEFAULT_PREVIOUS_DATA_URL = (
+    "https://mister-oatman.github.io/website-extensions/data.json"
+)
+
+# Seconds to wait for the published data.json before giving up on it.
+PREVIOUS_DATA_TIMEOUT_S = 30
 
 PLATFORMS: dict[str, type[SocialService]] = {
     "instagram": InstagramService,
@@ -51,15 +65,107 @@ def read_usernames(path: Path) -> list[str]:
     return [stripped for line in lines if (stripped := line.strip())]
 
 
-def scrape_profile(platform: str, username: str) -> dict[str, str | None]:
+def _read_data_file(path: Path) -> dict | None:
+    """Return the parsed ``data.json`` at ``path``, or ``None`` if unavailable.
+
+    A missing or unreadable file is not an error here — the previous counts are
+    only a best-effort fallback — so failures are logged and swallowed.
+
+    Args:
+        path: Location of a previously written ``data.json``.
+
+    Returns:
+        The parsed payload, or ``None`` if the file is absent or unparseable.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read previous data at %s (%s).", path, exc)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _fetch_data_url(url: str) -> dict | None:
+    """Return the parsed ``data.json`` published at ``url``, or ``None``.
+
+    Used on CI, where the previous run's output survives only on the published
+    page. Any failure (offline, 404 before the first deploy, bad JSON) is logged
+    and swallowed so the run continues without a fallback.
+
+    Args:
+        url: URL of the published ``data.json``.
+
+    Returns:
+        The parsed payload, or ``None`` if it could not be fetched or parsed.
+    """
+    try:
+        response = curl_requests.get(url, timeout=PREVIOUS_DATA_TIMEOUT_S)
+        if response.status_code != 200:
+            logger.warning(
+                "Previous data fetch from %s returned HTTP %d.",
+                url,
+                response.status_code,
+            )
+            return None
+        data = response.json()
+    except Exception as exc:  # noqa: BLE001 - the fallback is best-effort
+        logger.warning("Could not fetch previous data from %s (%s).", url, exc)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def load_previous_followers(local_path: Path, url: str) -> dict[tuple[str, str], str]:
+    """Return the last run's follower counts, keyed by ``(platform, username)``.
+
+    Prefers the local ``data.json`` (present after a local run) and falls back
+    to the published page (the only copy CI has, since ``site/`` is gitignored).
+    Only string counts are kept, so a failed profile's ``null`` is never carried
+    forward as a real value. An empty mapping means no history is available.
+
+    Args:
+        local_path: Location of the local ``data.json`` to prefer.
+        url: URL of the published ``data.json`` to fall back to.
+
+    Returns:
+        A mapping of ``(platform, username)`` to the last known follower count.
+    """
+    data = _read_data_file(local_path) or _fetch_data_url(url)
+    if not data:
+        logger.warning("No previous data available; failures will record null.")
+        return {}
+
+    previous: dict[tuple[str, str], str] = {}
+    for account in data.get("accounts", []):
+        platform = account.get("platform")
+        username = account.get("username")
+        followers = account.get("followers")
+        if (
+            isinstance(platform, str)
+            and isinstance(username, str)
+            and isinstance(followers, str)
+        ):
+            previous[(platform, username)] = followers
+    return previous
+
+
+def scrape_profile(
+    platform: str,
+    username: str,
+    previous_followers: dict[tuple[str, str], str],
+) -> dict[str, str | None]:
     """Fetch the follower count for ``username`` on ``platform``.
 
     Failures are captured in the result rather than raised, so one broken
-    profile never aborts the whole run.
+    profile never aborts the whole run. On failure the last known count for the
+    profile (from ``previous_followers``) is carried forward, falling back to
+    ``None`` only when no previous count is available.
 
     Args:
         platform: The platform key (a key of ``PLATFORMS``).
         username: The handle to look up.
+        previous_followers: Last known counts keyed by ``(platform, username)``.
 
     Returns:
         An entry of ``{"platform": ..., "username": ..., "followers": ...}``.
@@ -70,21 +176,41 @@ def scrape_profile(platform: str, username: str) -> dict[str, str | None]:
         logger.info("%s / %s: %s", username, platform, followers)
         return {"platform": platform, "username": username, "followers": followers}
     except Exception as exc:  # noqa: BLE001 - record any scrape failure
-        logger.warning("%s / %s failed: %s", username, platform, exc)
-        return {"platform": platform, "username": username, "followers": None}
+        previous = previous_followers.get((platform, username))
+        if previous is not None:
+            logger.warning(
+                "%s / %s failed (%s); using last known count %s.",
+                username,
+                platform,
+                exc,
+                previous,
+            )
+        else:
+            logger.warning(
+                "%s / %s failed (%s); no previous count to fall back to.",
+                username,
+                platform,
+                exc,
+            )
+        return {"platform": platform, "username": username, "followers": previous}
 
 
-def build_data(profiles_by_platform: dict[str, list[str]]) -> dict:
+def build_data(
+    profiles_by_platform: dict[str, list[str]],
+    previous_followers: dict[tuple[str, str], str],
+) -> dict:
     """Scrape every profile and assemble the JSON payload.
 
     Args:
         profiles_by_platform: The usernames to scrape, keyed by platform.
+        previous_followers: Last known counts keyed by ``(platform, username)``,
+            used to fill in a profile whose scrape fails.
 
     Returns:
         The serialisable data structure written to ``data.json``.
     """
     accounts = [
-        scrape_profile(platform, username)
+        scrape_profile(platform, username, previous_followers)
         for platform, usernames in profiles_by_platform.items()
         for username in usernames
     ]
@@ -116,6 +242,12 @@ def main() -> None:
         action="store_true",
         help="Scrape regardless of the SerpApi quota pacing (ignore should_scrape).",
     )
+    parser.add_argument(
+        "--previous-data-url",
+        default=DEFAULT_PREVIOUS_DATA_URL,
+        help="Published data.json to read last known counts from when a scrape "
+        "fails and no local site/data.json is present.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -139,7 +271,10 @@ def main() -> None:
     for platform, usernames in profiles_by_platform.items():
         logger.info("Scraping %d %s profile(s)", len(usernames), platform)
 
-    data = build_data(profiles_by_platform)
+    previous_followers = load_previous_followers(
+        args.output_dir / "data.json", args.previous_data_url
+    )
+    data = build_data(profiles_by_platform, previous_followers)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "data.json").write_text(

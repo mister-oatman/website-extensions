@@ -17,6 +17,13 @@ key, supplied via the `SERPAPI_KEY` environment variable (see
 [Running locally](#running-locally)); without it, the direct scrape still runs
 and only the fallback is skipped.
 
+If both the direct scrape and the search fail for a profile, the scraper carries
+that profile's **last known count** forward instead of leaving a gap. It takes
+the value from the previous `data.json` — the local `site/data.json` if present,
+otherwise the previously published copy (`--previous-data-url`, default the
+GitHub Pages URL), since `site/` is gitignored and CI starts from a clean
+checkout. Only if no previous count exists is `followers` recorded as `null`.
+
 The workflow fires every morning (`05:00 UTC`), but the script itself decides
 on which days to actually scrape: it asks the (free) SerpApi Account API how
 many searches are left in the billing period and when the period renews,
