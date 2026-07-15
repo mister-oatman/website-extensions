@@ -16,7 +16,7 @@ from typing import NamedTuple
 
 import serpapi
 
-from app.services.social import SEARCH_PREFIXES, SERPAPI_KEY_ENV
+from app.services.social import SERPAPI_KEY_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,8 @@ def should_scrape(today: date, quota: SerpApiQuota | None, profile_count: int) -
     if quota is None or profile_count <= 0:
         return True
 
-    # Worst case: every profile needs the fallback and tries every prefix.
-    worst_case_per_run = profile_count * len(SEARCH_PREFIXES)
+    # Worst case: every profile needs the fallback and tries some prefixes
+    worst_case_per_run = profile_count * 1.5
     runs_left = quota.searches_left // worst_case_per_run
     remaining_days = max((quota.renewal_date - today).days, 1)
 
