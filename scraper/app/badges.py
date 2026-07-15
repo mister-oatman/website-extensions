@@ -100,7 +100,7 @@ def _slug(text: str) -> str:
     Returns:
         A slug containing only ``[a-z0-9._-]``, never empty.
     """
-    slug = re.sub(r"[^a-z0-9._-]+", "_", text.strip().lower()).strip("_")
+    slug = re.sub(r"[^a-z0-9._-]+", "_", text.strip().lower()).strip()
     return slug or "_"
 
 
