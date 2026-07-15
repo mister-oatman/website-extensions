@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from re import IGNORECASE, search, sub
 
@@ -17,6 +18,78 @@ SERPAPI_KEY_ENV = "SERPAPI_KEY"
 
 SEARCH_PREFIXES = ("", "site:")
 """Google search prefixes the search fallback tries, in default order."""
+
+SERPAPI_TIMEOUT_S = 30
+"""Seconds to wait for a SerpApi response before timing out."""
+
+FALLBACK_SEARCHES_PER_HOUR = 1000
+"""Assumed hourly throughput when the Account API can't be read."""
+
+MAX_THROTTLE_S = 60
+"""Cap on the wait inserted between calls, so pacing never stalls a run."""
+
+_search_interval_s: float | None = None
+"""Cached minimum spacing between SerpApi calls; computed once on first use."""
+
+_last_search_time: float | None = None
+"""Monotonic timestamp of the last SerpApi call started, for throttling."""
+
+
+def _search_interval(client: serpapi.Client) -> float:
+    """Return the minimum spacing (in seconds) between SerpApi search calls.
+
+    SerpApi guarantees throughput per hour rather than per second, so calls are
+    paced to stay within that budget and avoid bursts that provoke slow
+    responses. The pace is taken from the account's live hourly limits via the
+    free Account API (which doesn't count against the search quota): the
+    searches still available this hour
+    (``account_rate_limit_per_hour`` minus ``this_hour_searches``) are spread
+    over an hour, so pacing tightens automatically as the account nears its
+    cap. The result is fetched once and cached for the process; if the Account
+    API can't be read it falls back to ``FALLBACK_SEARCHES_PER_HOUR``.
+    """
+    global _search_interval_s
+    if _search_interval_s is not None:
+        return _search_interval_s
+
+    per_hour = FALLBACK_SEARCHES_PER_HOUR
+    try:
+        account = client.account()
+        rate_limit = int(account["account_rate_limit_per_hour"])
+        used = int(account.get("this_hour_searches", 0))
+        per_hour = max(1, rate_limit - used)
+        logger.debug(
+            "SerpApi hourly limit %d, %d used this hour; pacing at %d/hour.",
+            rate_limit,
+            used,
+            per_hour,
+        )
+    except Exception as exc:  # noqa: BLE001 - pacing is best-effort
+        logger.warning(
+            "Could not read SerpApi account limits (%s); pacing at %d/hour.",
+            exc,
+            per_hour,
+        )
+
+    _search_interval_s = min(MAX_THROTTLE_S, 3600 / per_hour) if per_hour > 0 else 0.0
+    return _search_interval_s
+
+
+def _throttle_search(client: serpapi.Client) -> None:
+    """Sleep so consecutive SerpApi calls respect the account's hourly limit.
+
+    Enforces at least :func:`_search_interval` seconds between the *starts* of
+    consecutive calls, then records the current call's start time. Safe for the
+    scraper's sequential, single-threaded run.
+    """
+    global _last_search_time
+    interval = _search_interval(client)
+    if interval > 0 and _last_search_time is not None:
+        wait = interval - (time.monotonic() - _last_search_time)
+        if wait > 0:
+            logger.debug("Throttling SerpApi call: sleeping %.1fs.", wait)
+            time.sleep(wait)
+    _last_search_time = time.monotonic()
 
 
 class SocialService(ABC):
@@ -151,7 +224,7 @@ class SocialService(ABC):
 
         url = sub(r"^https?://(www\.)?", "", cls.USER_URL.format(username=username))
 
-        client = serpapi.Client(api_key=api_key, timeout=10)
+        client = serpapi.Client(api_key=api_key, timeout=SERPAPI_TIMEOUT_S)
 
         prefixes = list(SEARCH_PREFIXES)
         # Try the prefix that worked last time first; it usually still works
@@ -160,6 +233,7 @@ class SocialService(ABC):
             prefixes.sort(key=lambda prefix: prefix != preferred)
 
         for search_prefix in prefixes:
+            _throttle_search(client)
             results = client.search(
                 {"engine": "google", "q": f"{search_prefix}{url} follower"}
             )
