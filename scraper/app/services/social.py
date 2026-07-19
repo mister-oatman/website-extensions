@@ -123,7 +123,7 @@ class SocialService(ABC):
         try:
             return cls._get_followers_from_page(username)
         except Exception as exc:  # noqa: BLE001 - fall back to search on any failure
-            logger.warning(
+            logger.debug(
                 "Direct scrape failed for %s on %s (%s); falling back to search.",
                 username,
                 cls.BASE_URL,
