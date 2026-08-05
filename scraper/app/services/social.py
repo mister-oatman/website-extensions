@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from re import IGNORECASE, search, sub
 from typing import cast
 
@@ -23,6 +24,21 @@ SEARCH_PREFIXES = ("", "site:")
 SERPAPI_TIMEOUT_S = 300
 """Seconds to wait for a SerpApi response before timing out."""
 
+FOLLOWERS_PATTERN = r"(\d[\d.,]*)([KMB])?\+?(?=\s*followers?\b)"
+"""Matches a follower count in a search result, e.g. ``47.5K+ followers``.
+
+Group 1 is the number with its thousands separators, group 2 the ``K``/``M``/
+``B`` magnitude suffix, if present. A trailing ``+`` is matched but not
+captured.
+"""
+
+SUFFIX_FACTORS = {"B": 1_000_000_000, "M": 1_000_000, "K": 1_000, "": 1}
+"""Numeric value of each magnitude suffix a follower count can carry.
+
+Ordered from the largest, so :func:`_format_followers` can pick the first
+suffix a count reaches.
+"""
+
 FALLBACK_SEARCHES_PER_HOUR = 1000
 """Assumed hourly throughput when the Account API can't be read."""
 
@@ -34,6 +50,78 @@ _search_interval_s: float | None = None
 
 _last_search_time: float | None = None
 """Monotonic timestamp of the last SerpApi call started, for throttling."""
+
+
+def _parse_followers(text: str) -> Decimal | None:
+    """Return the follower count found in ``text`` as a number.
+
+    A search result states the count either in full (``437.270 Follower``) or
+    abbreviated with a magnitude suffix (``47.5K+ followers``), in whichever
+    notation the result's locale uses. A follower count is always a whole
+    number, so every separator groups thousands and none is a decimal symbol:
+    ``47.5K`` is exactly 47 500 followers, the ``5`` being the leading digit of
+    the group the ``K`` cuts short.
+
+    Args:
+        text: A search result field, e.g. a snippet or a displayed link.
+
+    Returns:
+        The follower count as a number, or ``None`` if ``text`` reveals no count
+        or states it unintelligibly.
+    """
+    followers = search(FOLLOWERS_PATTERN, text, IGNORECASE)
+
+    if not followers:
+        return None
+
+    count, suffix = followers.group(1), (followers.group(2) or "").upper()
+
+    if suffix:
+        # An abbreviated count breaks off mid-group, which scales exactly like
+        # a fraction of the suffix would ("47.5K" -> 47.5 * 1000 = 47 500), so
+        # the last separator can be read as a decimal point. Separators before
+        # it close whole groups ("1.234,5K") and are dropped.
+        count = sub(r"[.,](?=[^.,]*[.,])", "", count)
+        count = sub(r"[.,]", ".", count)
+    else:
+        # A count stated in full has whole groups only ("437.270" / "437,270").
+        count = sub(r"[.,]", "", count)
+
+    try:
+        return Decimal(count) * SUFFIX_FACTORS[suffix]
+    except InvalidOperation:
+        logger.debug(
+            "Could not interpret %r as a follower count in %r.",
+            followers.group(0),
+            text,
+        )
+        return None
+
+
+def _format_followers(count: Decimal) -> str:
+    """Render a follower count for output, e.g. ``Decimal("437270")`` -> ``437.2K``.
+
+    Abbreviates the count with the largest magnitude suffix it reaches and keeps
+    one leading digit of the group below that suffix. The remaining digits are
+    cut off rather than rounded up, so the output never claims more followers
+    than the platform reported.
+
+    Args:
+        count: A follower count as returned by :func:`_parse_followers`.
+
+    Returns:
+        The abbreviated count, always separated by a dot, e.g. ``"47.5K"``. A
+        count that lands on a whole group keeps no separator (``"437K"``, not
+        ``"437.0K"``).
+    """
+    suffix, factor = next(
+        (suffix, factor)
+        for suffix, factor in SUFFIX_FACTORS.items()
+        if count >= factor or factor == 1
+    )
+    scaled = (count / factor).quantize(Decimal("0.1"), rounding=ROUND_DOWN)
+
+    return f"{f'{scaled:f}'.removesuffix('.0')}{suffix}"
 
 
 def _search_interval(client: serpapi.Client) -> float:
@@ -185,32 +273,45 @@ class SocialService(ABC):
             username: The profile handle to look up.
 
         Returns:
-            The follower count in uppercase, e.g. ``"1.2M"``.
+            The follower count abbreviated with a magnitude suffix, e.g.
+            ``"1.2M"``.
 
         Raises:
             ValueError: If the search fails or the follower count cannot be
-                parsed from the result snippet.
+                parsed from the result's snippet or displayed link.
         """
-        user_meta = cls.get_user_meta(username)
+        snippet, displayed_link = cls.get_user_meta(username)
 
-        followers = search(r"\d\S+(?= follower)", user_meta, IGNORECASE)
+        # Both sources state the count in their own way, so whichever reports
+        # more followers wins.
+        candidates = [
+            followers
+            for followers in (
+                _parse_followers(snippet),
+                _parse_followers(displayed_link),
+            )
+            if followers is not None
+        ]
 
-        if not followers:
+        if not candidates:
             raise ValueError(
-                f"Followers count not found for {username} on {cls.BASE_URL}. The page structure may have changed."
+                f"Followers count not found for {username} on {cls.BASE_URL}. "
+                "The page structure may have changed."
             )
 
-        return followers.group(0).upper()
+        return _format_followers(max(candidates))
 
     @classmethod
-    def get_user_meta(cls, username: str) -> str:
+    def get_user_meta(cls, username: str) -> tuple[str, str]:
         """Fetch the search meta for a user's profile page.
 
         Args:
             username: The profile handle to fetch.
 
         Returns:
-            The page's meta description as text.
+            The snippet and the displayed link of the first search result that
+            points at the profile and states a follower count. Either one can
+            be empty, but not both.
 
         Raises:
             ValueError: If the ``SERPAPI_KEY`` environment variable is unset or
@@ -240,7 +341,7 @@ class SocialService(ABC):
                 results = client.search(
                     {
                         "engine": "google",
-                        "q": f"{search_prefix}{url} follower",
+                        "q": f"{search_prefix}{url}",
                         "gl": "de",
                         "location": "585069a5ee19ad271e9b56e3",
                     }
@@ -249,19 +350,17 @@ class SocialService(ABC):
                 logger.warning("SerpApi request failed (%s).", exc)
                 continue
 
-            if result := next(
-                (
-                    result["snippet"]
-                    for result in results.get("organic_results", [])
-                    if search(rf"^https?://(www\.)?{url}/?", result["link"])
-                    and search(r"\S+(?= follower)", result["snippet"], IGNORECASE)
-                ),
-                None,
-            ):
-                state.set_search_prefix(cls.PLATFORM, search_prefix)
-                return result
+            for result in results.get("organic_results", []):
+                if not search(rf"^https?://(www\.)?{url}/?", result.get("link", "")):
+                    continue
 
-        raise ValueError(f"No follower snippet found for {username} on {cls.BASE_URL}.")
+                meta = (result.get("snippet", ""), result.get("displayed_link", ""))
+
+                if any(_parse_followers(text) is not None for text in meta):
+                    state.set_search_prefix(cls.PLATFORM, search_prefix)
+                    return meta
+
+        raise ValueError(f"No follower count found for {username} on {cls.BASE_URL}.")
 
 
 class InstagramService(SocialService):
