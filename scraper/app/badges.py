@@ -8,6 +8,10 @@ every variant in ``BADGE_VARIANTS``: a ``white`` and a ``black`` count-plus-logo
 and ``name-white``/``name-black`` that prefix the platform name (in caps) and
 drop the logo — so the page can pick the colour and layout that suit it.
 
+The text is drawn as Inter ExtraBold outlines from :mod:`app.inter` rather than
+set as SVG ``<text>``, so a badge looks the same to every viewer instead of
+depending on which fonts they happen to have — see that module for why.
+
 Badges are written as part of a normal scrape (``app.main``) and can also be
 regenerated on their own with ``uv run render-badges``, which reads an existing
 ``data.json`` and touches no network or SerpApi quota — handy for iterating on
@@ -21,7 +25,7 @@ from pathlib import Path
 from typing import NamedTuple
 from xml.sax.saxutils import escape
 
-from app import datafile
+from app import datafile, inter
 
 logger = logging.getLogger(__name__)
 
@@ -56,22 +60,25 @@ BADGE_VARIANTS: dict[str, BadgeVariant] = {
 }
 FONT_SIZE = 20
 
-# Inter, normal style, extra-bold. Embedded SVGs can't pull fonts from the host
-# page, so this only renders in Inter for viewers who have it installed locally;
-# the sans-serif fallback covers everyone else.
-FONT_FAMILY = "Inter, sans-serif"
-FONT_STYLE = "normal"
-FONT_WEIGHT = 800
-
-# Rendered size (px) of the 24x24 logo glyph and the gap between it and the count.
+# Rendered size (px) of the 24x24 logo glyph, and the gap between the end of
+# the count and the logo's optical left edge.
 LOGO_SIZE = 22
-LOGO_GAP = 6
+LOGO_GAP = 3
 
-# Fraction of the font size a single character is assumed to advance, and the
-# cap height of the count text (all digits and caps, no descenders). Only used
-# to size the SVG box, so close estimates are fine.
-_CHAR_WIDTH_EM = 0.64
-_CAP_HEIGHT_EM = 0.73
+# Px per font unit: what everything in ``inter`` has to be multiplied by to
+# reach the badge's coordinate space.
+_UNIT = FONT_SIZE / inter.UNITS_PER_EM
+
+# Height in px of the badge's text. Counts and platform names are digits and
+# capitals throughout, so nothing rises above the cap height or drops below the
+# baseline and this is the whole of it.
+_CAP_HEIGHT = inter.CAP_HEIGHT * _UNIT
+
+# Stand-in advance for a character ``inter`` doesn't carry — only a platform
+# name could hold one, and it renders as a blank of the right sort of size.
+# Erring wide merely pads the badge box, where erring narrow would let the logo
+# crowd the text.
+_UNKNOWN_ADVANCE = max(inter.ADVANCE.values())
 
 # Official brand glyphs (24x24 viewBox, from Simple Icons), drawn after the
 # count to mark the platform.
@@ -80,24 +87,77 @@ _LOGO_PATHS: dict[str, str] = {
     "tiktok": "M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z",
 }
 
-# Horizontal bounds (optical left edge, geometric right edge) of each glyph
-# inside its 24x24 viewBox. The optical left edge is where the glyph is placed
-# relative to the count, so every platform shows the same apparent gap: it is
-# the tuning knob (bigger = logo further left) and is set by eye — Instagram's
-# flat left edge is simply its geometric ink, while TikTok's leftmost ink is
-# only the tangent of the bottom-left disc, so its value sits well inside. The
-# geometric right edge is where the glyph's ink actually ends and closes the
-# badge box with no trailing whitespace.
+# Horizontal bounds of each glyph's ink inside its 24x24 viewBox, taken from
+# the path's bounding box. The left edge is what the logo is positioned by, so
+# the gap after the count is ink to ink and comes out the same on every
+# platform; the right edge closes the badge box with no trailing whitespace.
+# Instagram's rounded square fills the viewBox exactly, TikTok's note is inset
+# on both sides.
 _LOGO_INK_X: dict[str, tuple[float, float]] = {
     "instagram": (0.0, 24.0),
-    "tiktok": (9.34, 22.425),
+    "tiktok": (1.574, 22.425),
 }
+
+# Assumed bounds for a platform whose glyph has not been measured.
 _FULL_INK_X = (0.0, 24.0)
 
 
-def _text_width(text: str) -> int:
-    """Return an approximate rendered width in px for ``text``."""
-    return round(len(text) * FONT_SIZE * _CHAR_WIDTH_EM)
+def _pen_positions(text: str) -> tuple[list[tuple[str, float]], float]:
+    """Lay ``text`` out in Inter ExtraBold, one pen position per character.
+
+    Walks the text the way a text engine would, advancing by each character's
+    own width and closing up the pairs Inter kerns. Because the badge draws the
+    result itself rather than asking the viewer's renderer for it, the width
+    that comes back is what the badge really is that wide — which is what keeps
+    the logo the same distance behind a ``254K`` and a ``195K``.
+
+    Args:
+        text: The badge's text, e.g. ``"252.7K"``.
+
+    Returns:
+        The characters paired with the px offset each is drawn at, and the px
+        width of the whole run.
+    """
+    positions: list[tuple[str, float]] = []
+    pen = 0
+    for index, char in enumerate(text):
+        if index:
+            pen += inter.KERN.get(text[index - 1 : index + 1], 0)
+        positions.append((char, pen * _UNIT))
+        pen += inter.ADVANCE.get(char, _UNKNOWN_ADVANCE)
+    return positions, pen * _UNIT
+
+
+def _text_width(text: str) -> float:
+    """Return the px width of ``text`` set in Inter ExtraBold."""
+    return _pen_positions(text)[1]
+
+
+def _text_markup(text: str, baseline: float, color: str) -> str:
+    """Return ``text`` drawn as Inter ExtraBold outlines, sitting on ``baseline``.
+
+    Each character becomes a ``<path>`` in font units inside one group that
+    scales them to :data:`FONT_SIZE` and flips the y axis, since glyphs are
+    drawn y-up from the baseline and SVG counts y down from the top. Characters
+    with no outline (the space) contribute their advance and nothing else.
+
+    Args:
+        text: The badge's text.
+        baseline: Where the text sits, in the badge's coordinate space.
+        color: Fill colour for the glyphs.
+
+    Returns:
+        The group markup for the whole run.
+    """
+    glyphs = "".join(
+        f'<path d="{inter.OUTLINES[char]}" transform="translate({x / _UNIT:.0f},0)"/>'
+        for char, x in _pen_positions(text)[0]
+        if char in inter.OUTLINES
+    )
+    return (
+        f'<g transform="translate(0,{baseline:.2f}) scale({_UNIT:.6f},-{_UNIT:.6f})" '
+        f'fill="{color}">{glyphs}</g>'
+    )
 
 
 def _slug(text: str) -> str:
@@ -153,16 +213,17 @@ def render_badge(
 ) -> str:
     """Return a self-contained SVG of the follower count for one account.
 
-    Two layouts, both Inter text filled with ``color`` on a transparent
-    background (so a light or dark ``color`` can suit either page):
+    Two layouts, both drawn as Inter ExtraBold outlines filled with ``color`` on
+    a transparent background (so a light or dark ``color`` can suit either page):
 
     - ``show_name`` false: the count followed by the platform logo.
     - ``show_name`` true: the platform name in all caps before the count, with
       no logo.
 
-    The SVG box hugs the ink on all sides — no padding, and the height is the
-    logo (or, without one, the text's cap height) — so spacing around the badge
-    is entirely up to the embedding page.
+    The box carries no padding of its own: it closes on the logo's ink and
+    stands as tall as the logo, or as the text's cap height when there is no
+    logo. Only the glyphs' own side bearings sit inside it, well under a px. So
+    spacing around the badge is entirely the embedding page's to decide.
 
     Args:
         platform: The platform key (e.g. ``"instagram"``), selecting the logo
@@ -191,20 +252,18 @@ def render_badge(
         height = LOGO_SIZE
         logo = _logo_markup(platform, text_w + LOGO_GAP, 0, color)
     else:
-        width = text_w
-        height = round(FONT_SIZE * _CAP_HEIGHT_EM)
+        width = round(text_w)
+        height = round(_CAP_HEIGHT)
         logo = ""
     # Centre the cap-height text vertically (baseline == box bottom when the
     # text is the only content).
-    baseline = round((height + FONT_SIZE * _CAP_HEIGHT_EM) / 2)
+    baseline = (height + _CAP_HEIGHT) / 2
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
         f'height="{height}" role="img" aria-label="{text_esc}">'
         f"<title>{text_esc}</title>"
-        f'<text x="0" y="{baseline}" text-anchor="start" fill="{color}" '
-        f'font-family="{FONT_FAMILY}" font-style="{FONT_STYLE}" '
-        f'font-weight="{FONT_WEIGHT}" font-size="{FONT_SIZE}">{text_esc}</text>'
+        f"{_text_markup(text, baseline, color)}"
         f"{logo}"
         "</svg>\n"
     )

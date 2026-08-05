@@ -5,3 +5,9 @@ members = ["scraper"]
 dev = [
   "prek~=0.2"
 ]
+
+# tools/ holds hand-run scripts that pull their own dependencies in via
+# `uv run --with` (see each script's docstring), so they are deliberately not
+# installed here and ty can't resolve their imports.
+[tool.ty.src]
+exclude = ["tools"]
